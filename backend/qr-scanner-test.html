@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parking Gate QR Scanner - Test Tool</title>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .gate-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .gate-btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+
+        .gate-btn.active {
+            background: white;
+            color: #667eea;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+
+        #reader {
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 2px solid #c3e6cb;
+            display: block;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 2px solid #f5c6cb;
+            display: block;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 2px solid #bee5eb;
+            display: block;
+        }
+
+        .status-icon {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+
+        .result-details {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+
+        .result-details div {
+            margin: 5px 0;
+        }
+
+        .result-details strong {
+            color: #667eea;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+        .manual-input {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #e9ecef;
+        }
+
+        .manual-input h3 {
+            margin-bottom: 15px;
+            color: #495057;
+            font-size: 18px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 Parking Gate QR Scanner</h1>
+            <p>Test tool for ESP32-CAM simulation</p>
+        </div>
+
+        <div class="gate-selector">
+            <button class="gate-btn active" onclick="selectGate('entry')">
+                🚪 ENTRY GATE
+            </button>
+            <button class="gate-btn" onclick="selectGate('exit')">
+                🚪 EXIT GATE
+            </button>
+        </div>
+
+        <div class="card">
+            <div id="status" class="status"></div>
+            
+            <div id="reader"></div>
+
+            <button id="scanBtn" class="btn btn-primary" onclick="startScanning()">
+                📷 Start Camera Scanner
+            </button>
+            <button id="stopBtn" class="btn btn-danger" onclick="stopScanning()" style="display: none;">
+                ⏹️ Stop Scanner
+            </button>
+
+            <div class="manual-input">
+                <h3>Manual QR Code Entry</h3>
+                <div class="input-group">
+                    <input type="text" id="manualQR" placeholder="Enter QR code (e.g., PARKING-abc123...)">
+                    <button class="btn btn-primary" onclick="verifyManual()">Verify</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="margin-bottom: 15px; color: #495057;">📊 Session Stats</h3>
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="number" id="successCount">0</div>
+                    <div class="label">Successful</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number" id="failCount">0</div>
+                    <div class="label">Failed</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentGate = 'entry';
+        let html5QrCode = null;
+        let isScanning = false;
+        let successCount = 0;
+        let failCount = 0;
+
+        // Auto-detect API URL based on current page URL
+        const API_BASE_URL = window.location.origin;
+
+        function selectGate(gate) {
+            currentGate = gate;
+            document.querySelectorAll('.gate-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            showStatus('info', `Switched to ${gate.toUpperCase()} gate mode`);
+        }
+
+        function showStatus(type, message, details = null) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            
+            let icon = '✅';
+            if (type === 'error') icon = '❌';
+            if (type === 'info') icon = 'ℹ️';
+            
+            let html = `<span class="status-icon">${icon}</span>${message}`;
+            
+            if (details) {
+                html += `<div class="result-details">`;
+                for (const [key, value] of Object.entries(details)) {
+                    html += `<div><strong>${key}:</strong> ${value}</div>`;
+                }
+                html += `</div>`;
+            }
+            
+            statusDiv.innerHTML = html;
+        }
+
+        async function verifyQRCode(qrCode) {
+            const endpoint = currentGate === 'entry' ? '/api/parking/entry' : '/api/parking/exit';
+            
+            try {
+                showStatus('info', `Verifying QR code at ${currentGate} gate...`);
+                
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ qrCode })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.valid) {
+                    successCount++;
+                    document.getElementById('successCount').textContent = successCount;
+                    
+                    const details = {
+                        'Action': data.action || 'open_gate',
+                        'Message': data.message,
+                        'Slot': data.slotName || data.slotId,
+                    };
+                    
+                    if (currentGate === 'entry') {
+                        details['Duration'] = `${data.duration} hours`;
+                        details['Expires At'] = new Date(data.expiresAt).toLocaleString();
+                    } else {
+                        details['Actual Duration'] = data.actualDuration;
+                        details['Booked Duration'] = data.bookedDuration;
+                    }
+                    
+                    showStatus('success', `✅ GATE OPENED - ${data.message}`, details);
+                    
+                    // Play success sound (optional)
+                    playSound('success');
+                } else {
+                    failCount++;
+                    document.getElementById('failCount').textContent = failCount;
+                    
+                    showStatus('error', `❌ ACCESS DENIED - ${data.message}`);
+                    playSound('error');
+                }
+            } catch (error) {
+                failCount++;
+                document.getElementById('failCount').textContent = failCount;
+                showStatus('error', `Network error: ${error.message}`);
+                playSound('error');
+            }
+        }
+
+        function startScanning() {
+            if (isScanning) return;
+
+            html5QrCode = new Html5Qrcode("reader");
+            
+            html5QrCode.start(
+                { facingMode: "environment" },
+                {
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 }
+                },
+                (decodedText) => {
+                    verifyQRCode(decodedText);
+                },
+                (errorMessage) => {
+                    // Ignore scanning errors
+                }
+            ).then(() => {
+                isScanning = true;
+                document.getElementById('scanBtn').style.display = 'none';
+                document.getElementById('stopBtn').style.display = 'block';
+                showStatus('info', 'Camera started. Point at QR code...');
+            }).catch(err => {
+                showStatus('error', `Camera error: ${err}`);
+            });
+        }
+
+        function stopScanning() {
+            if (!isScanning || !html5QrCode) return;
+
+            html5QrCode.stop().then(() => {
+                isScanning = false;
+                document.getElementById('scanBtn').style.display = 'block';
+                document.getElementById('stopBtn').style.display = 'none';
+                showStatus('info', 'Camera stopped');
+            });
+        }
+
+        function verifyManual() {
+            const qrCode = document.getElementById('manualQR').value.trim();
+            if (!qrCode) {
+                showStatus('error', 'Please enter a QR code');
+                return;
+            }
+            verifyQRCode(qrCode);
+        }
+
+        function playSound(type) {
+            // Create audio context for beep sounds
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            if (type === 'success') {
+                oscillator.frequency.value = 800;
+                gainNode.gain.value = 0.3;
+            } else {
+                oscillator.frequency.value = 200;
+                gainNode.gain.value = 0.5;
+            }
+            
+            oscillator.start();
+            setTimeout(() => oscillator.stop(), 200);
+        }
+
+        // Allow Enter key in manual input
+        document.getElementById('manualQR').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                verifyManual();
+            }
+        });
+    </script>
+</body>
+</html>
