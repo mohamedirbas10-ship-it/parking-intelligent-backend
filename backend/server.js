@@ -50,6 +50,26 @@ app.get('/', (req, res) => {
   });
 });
 
+// Reset all data (for testing)
+app.post('/api/reset', (req, res) => {
+  console.log('🔄 Resetting all data...');
+  
+  // Clear all data
+  users = [];
+  bookings = [];
+  initializeParkingSlots(); // Reset parking slots to available
+  
+  console.log('✅ All data reset successfully');
+  console.log(`📊 Users: ${users.length}, Bookings: ${bookings.length}, Slots: ${parkingSlots.length}`);
+  
+  res.json({ 
+    message: 'All data reset successfully',
+    users: users.length,
+    bookings: bookings.length,
+    slots: parkingSlots.length
+  });
+});
+
 // User Authentication
 app.post('/api/auth/register', (req, res) => {
   const { email, password, name } = req.body;
@@ -106,16 +126,87 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
+// Helper to check availability
+const isSlotAvailable = (slotId, startTime, endTime) => {
+  const slotBookings = bookings.filter(b => 
+    b.slotId === slotId && 
+    ['active', 'occupied'].includes(b.status)
+  );
+
+  for (const b of slotBookings) {
+    const bStart = new Date(b.reservedAt).getTime();
+    const bEnd = new Date(b.expiresAt).getTime();
+    const newStart = new Date(startTime).getTime();
+    const newEnd = new Date(endTime).getTime();
+
+    // Check overlap
+    if (newStart < bEnd && newEnd > bStart) {
+      return false;
+    }
+  }
+  return true;
+};
+
 // Parking Slots
 app.get('/api/parking/slots', (req, res) => {
+  const now = new Date();
+  
+  const dynamicSlots = parkingSlots.map(slot => {
+    // Find active bookings for this slot
+    const slotBookings = bookings.filter(b => 
+      b.slotId === slot.id && 
+      ['active', 'occupied'].includes(b.status)
+    );
+
+    let status = 'available';
+    let bookedBy = null;
+    let bookingId = null;
+
+    // Check for CURRENT occupation
+    const currentBooking = slotBookings.find(b => {
+      const start = new Date(b.reservedAt);
+      const end = new Date(b.expiresAt);
+      return now >= start && now <= end;
+    });
+
+    if (currentBooking) {
+      status = currentBooking.enteredAt ? 'occupied' : 'booked';
+      bookedBy = currentBooking.userId;
+      bookingId = currentBooking.id;
+    } 
+    // If no current booking, it remains 'available' even if there are future bookings
+    
+    // Check for next upcoming booking to show "Reserved later" status if needed
+    let nextBooking = null;
+    if (status === 'available') {
+        const futureBookings = slotBookings.filter(b => new Date(b.reservedAt) > now);
+        if (futureBookings.length > 0) {
+            // Get the earliest future booking
+            const next = futureBookings.sort((a, b) => new Date(a.reservedAt) - new Date(b.reservedAt))[0];
+            nextBooking = {
+                start: next.reservedAt,
+                end: next.expiresAt
+            };
+        }
+    }
+
+    return {
+      ...slot,
+      status,
+      bookedBy,
+      bookingId,
+      nextBooking
+    };
+  });
+
   res.json({
-    slots: parkingSlots
+    slots: dynamicSlots
   });
 });
 
 // Create Booking
 app.post('/api/bookings', (req, res) => {
-  const { userId, slotId, duration } = req.body;
+  const { userId, slotId, duration, startTime } = req.body;
   
   if (!userId || !slotId || !duration) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -127,8 +218,13 @@ app.post('/api/bookings', (req, res) => {
     return res.status(404).json({ error: 'Slot not found' });
   }
   
-  if (slot.status !== 'available') {
-    return res.status(409).json({ error: 'Slot is not available' });
+  // Calculate start and end times
+  const start = startTime ? new Date(startTime) : new Date();
+  const end = new Date(start.getTime() + duration * 60 * 60 * 1000);
+
+  // Check for time-based availability
+  if (!isSlotAvailable(slotId, start, end)) {
+    return res.status(409).json({ error: 'Slot is not available for the selected time' });
   }
   
   const booking = {
@@ -136,16 +232,22 @@ app.post('/api/bookings', (req, res) => {
     userId,
     slotId,
     duration,
-    reservedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + duration * 60 * 60 * 1000).toISOString(),
+    reservedAt: start.toISOString(),
+    expiresAt: end.toISOString(),
     status: 'active',
     qrCode: `PARKING-${uuidv4()}`
   };
   
   bookings.push(booking);
-  slot.status = 'booked';
-  slot.bookedBy = userId;
-  slot.bookingId = booking.id;
+  
+  // We no longer strictly set slot.status = 'booked' here because 
+  // the status is now calculated dynamically in GET /slots based on time.
+  // However, for compatibility with legacy code that might check the array directly:
+  if (new Date() >= start && new Date() <= end) {
+      slot.status = 'booked';
+      slot.bookedBy = userId;
+      slot.bookingId = booking.id;
+  }
   
   res.status(201).json({
     message: 'Booking created successfully',
