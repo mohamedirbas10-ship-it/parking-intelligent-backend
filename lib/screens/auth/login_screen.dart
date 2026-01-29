@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main/parking_home_screen.dart';
 import 'register_screen.dart';
+import '../../services/api_service.dart';
+import '../../models/user.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _obscurePassword = true;
+  final ApiService _apiService = ApiService();
 
   @override
   void dispose() {
@@ -32,59 +35,90 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // Offline login - check if user exists in local storage
-      final prefs = await SharedPreferences.getInstance();
-      final registeredUsers = prefs.getStringList('registeredUsers') ?? [];
-      
       final email = _emailController.text.trim();
       final password = _passwordController.text;
-      
-      // Find user in registered users
-      String? userName;
-      bool userFound = false;
-      
-      for (var userJson in registeredUsers) {
-        final parts = userJson.split('|');
-        if (parts.length >= 3) {
-          final storedEmail = parts[1];
-          final storedPassword = parts[2];
-          
-          if (storedEmail == email && storedPassword == password) {
-            userName = parts[0];
-            userFound = true;
-            break;
-          }
-        }
-      }
-      
-      if (userFound) {
-        // Save login session
+
+      print('🔵 Attempting login for: $email');
+
+      // Call backend API
+      final result = await _apiService.login(email: email, password: password);
+
+      if (result['success'] == true &&
+          result['user'] != null &&
+          result['token'] != null) {
+        final user = result['user'] as User;
+        final token = result['token'] as String;
+
+        print('✅ Login successful! User: ${user.name}');
+        print('✅ Token received: ${token.substring(0, 20)}...');
+        print('✅ Full token: $token');
+
+        // Save token and user data
+        final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('isLoggedIn', true);
-        await prefs.setString('userEmail', email);
-        await prefs.setString('userName', userName ?? 'User');
+        await prefs.setString('token', token);
+        await prefs.setString('userId', user.id);
+        await prefs.setString('userEmail', user.email);
+        await prefs.setString('userName', user.name);
+
+        print('💾 Saved to SharedPreferences:');
+        print('   - token: ${token.substring(0, 20)}...');
+        print('   - userId: ${user.id}');
+        print('   - userEmail: ${user.email}');
+        print('   - userName: ${user.name}');
+
+        // Set token for API calls
+        ApiService.setToken(token);
+
+        // Verify token was set
+        final savedToken = ApiService.getToken();
+        print(
+          '🔍 Verify - Token in ApiService: ${savedToken != null ? "YES" : "NO"}',
+        );
+        print('🔍 Verify - isAuthenticated: ${ApiService.isAuthenticated}');
 
         if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Welcome back, ${user.name}!'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (context) => const ParkingHomeScreen()),
           );
         }
       } else {
+        // Login failed
+        final error =
+            result['error'] ??
+            'Login failed - Invalid credentials or server error';
+        print('❌ Login failed: $error');
+        print('❌ Result: $result');
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Invalid email or password'),
+            SnackBar(
+              content: Text(error),
               backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
             ),
           );
         }
       }
     } catch (e) {
+      print('❌ Exception during login: $e');
+      print('❌ Stack trace: ${StackTrace.current}');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${e.toString()}'),
+            content: Text('Network error: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -101,18 +135,14 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.of(context).size.height;
     final isMobile = MediaQuery.of(context).size.width < 600;
-    
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              Colors.blue.shade50,
-              Colors.white,
-              Colors.blue.shade50,
-            ],
+            colors: [Colors.blue.shade50, Colors.white, Colors.blue.shade50],
           ),
         ),
         child: SafeArea(
@@ -179,18 +209,28 @@ class _LoginScreenState extends State<LoginScreen> {
                               keyboardType: TextInputType.emailAddress,
                               decoration: InputDecoration(
                                 labelText: 'Email',
-                                prefixIcon: Icon(Icons.email, color: Colors.blue.shade600),
+                                prefixIcon: Icon(
+                                  Icons.email,
+                                  color: Colors.blue.shade600,
+                                ),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide: BorderSide(
+                                    color: Colors.grey.shade300,
+                                  ),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide: BorderSide(
+                                    color: Colors.grey.shade300,
+                                  ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                  borderSide: BorderSide(
+                                    color: Colors.blue.shade600,
+                                    width: 2,
+                                  ),
                                 ),
                                 filled: true,
                                 fillColor: Colors.grey.shade50,
@@ -208,10 +248,15 @@ class _LoginScreenState extends State<LoginScreen> {
                               obscureText: _obscurePassword,
                               decoration: InputDecoration(
                                 labelText: 'Password',
-                                prefixIcon: Icon(Icons.lock, color: Colors.blue.shade600),
+                                prefixIcon: Icon(
+                                  Icons.lock,
+                                  color: Colors.blue.shade600,
+                                ),
                                 suffixIcon: IconButton(
                                   icon: Icon(
-                                    _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                                    _obscurePassword
+                                        ? Icons.visibility
+                                        : Icons.visibility_off,
                                     color: Colors.grey.shade600,
                                   ),
                                   onPressed: () {
@@ -222,15 +267,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide: BorderSide(
+                                    color: Colors.grey.shade300,
+                                  ),
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.grey.shade300),
+                                  borderSide: BorderSide(
+                                    color: Colors.grey.shade300,
+                                  ),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                  borderSide: BorderSide(
+                                    color: Colors.blue.shade600,
+                                    width: 2,
+                                  ),
                                 ),
                                 filled: true,
                                 fillColor: Colors.grey.shade50,
@@ -279,7 +331,10 @@ class _LoginScreenState extends State<LoginScreen> {
                               onPressed: () {
                                 Navigator.push(
                                   context,
-                                  MaterialPageRoute(builder: (context) => const RegisterScreen()),
+                                  MaterialPageRoute(
+                                    builder: (context) =>
+                                        const RegisterScreen(),
+                                  ),
                                 );
                               },
                               child: RichText(

@@ -95,6 +95,7 @@ app.post('/api/auth/register', (req, res) => {
   
   res.status(201).json({
     message: 'User registered successfully',
+    token: 'mock-token-' + user.id,
     user: {
       id: user.id,
       email: user.email,
@@ -118,6 +119,7 @@ app.post('/api/auth/login', (req, res) => {
   
   res.json({
     message: 'Login successful',
+    token: 'mock-token-' + user.id,
     user: {
       id: user.id,
       email: user.email,

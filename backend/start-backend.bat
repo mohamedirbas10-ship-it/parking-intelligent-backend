@@ -1,0 +1,3 @@
+@echo off
+echo Starting Smart Car Parking Backend...
+npm start

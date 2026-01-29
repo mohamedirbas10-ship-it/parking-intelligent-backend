@@ -3,9 +3,9 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/login_screen.dart';
 import '../../models/parking_spot.dart';
-import '../../models/booking.dart';
 import '../../widgets/time_selection_dialog.dart';
 import '../../services/booking_provider.dart';
+import '../../models/booking.dart';
 import 'qr_code_screen.dart';
 import 'booking_history_screen.dart';
 import 'profile_screen.dart';
@@ -38,6 +38,11 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
       _userName = prefs.getString('userName') ?? 'User';
       _userId = prefs.getString('userEmail') ?? 'user@example.com';
     });
+
+    if (mounted && _userId.isNotEmpty) {
+      final provider = Provider.of<BookingProvider>(context, listen: false);
+      await provider.loadUserBookings(_userId);
+    }
   }
 
   Future<void> _loadGlobalBookings() async {
@@ -80,6 +85,8 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
   }
 
   Future<void> _refreshBookings() async {
+    final provider = Provider.of<BookingProvider>(context, listen: false);
+    await provider.refreshBookingsAndSlots(_userId);
     await _loadGlobalBookings();
 
     if (mounted) {
@@ -255,7 +262,7 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: iconBgColor,
                 borderRadius: BorderRadius.circular(12),
@@ -263,34 +270,37 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
               child: Icon(
                 isCancelled ? Icons.cancel : Icons.local_parking,
                 color: iconColor,
-                size: 32,
+                size: 28,
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
-                      Text(
-                        'Slot ${spot.name}',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                      Flexible(
+                        child: Text(
+                          'Slot ${spot.name}',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       if (isCancelled) ...[
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
+                            horizontal: 6,
+                            vertical: 2,
                           ),
                           decoration: BoxDecoration(
                             color: Colors.red.shade100,
-                            borderRadius: BorderRadius.circular(12),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(color: Colors.red.shade300),
                           ),
                           child: Row(
@@ -298,17 +308,16 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
                             children: [
                               Icon(
                                 Icons.block,
-                                size: 12,
+                                size: 10,
                                 color: Colors.red.shade700,
                               ),
-                              const SizedBox(width: 4),
+                              const SizedBox(width: 3),
                               Text(
-                                'CANCELLED',
+                                'CANCEL',
                                 style: TextStyle(
-                                  fontSize: 10,
+                                  fontSize: 9,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.red.shade700,
-                                  letterSpacing: 0.5,
                                 ),
                               ),
                             ],
@@ -356,36 +365,39 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
                 ],
               ),
             ),
-            ElevatedButton(
-              onPressed: isCancelled
-                  ? null
-                  : () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => QRCodeScreen(spot: spot),
-                        ),
-                      );
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isCancelled
-                    ? Colors.grey.shade300
-                    : Colors.green.shade600,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
+            SizedBox(
+              height: 36,
+              child: ElevatedButton(
+                onPressed: isCancelled
+                    ? null
+                    : () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => QRCodeScreen(spot: spot),
+                          ),
+                        );
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isCancelled
+                      ? Colors.grey.shade300
+                      : Colors.green.shade600,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: Text(
-                isCancelled ? 'Cancelled' : 'View QR',
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                child: Text(
+                  isCancelled ? 'Done' : 'View QR',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ),
@@ -573,7 +585,12 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
           // Primary Header
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.only(top: 50, bottom: 20, left: 20, right: 20),
+            padding: const EdgeInsets.only(
+              top: 50,
+              bottom: 20,
+              left: 20,
+              right: 20,
+            ),
             decoration: const BoxDecoration(
               gradient: AppColors.primaryGradient,
             ),
@@ -606,7 +623,11 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: const Icon(Icons.menu, color: Colors.white, size: 28),
+                      icon: const Icon(
+                        Icons.menu,
+                        color: Colors.white,
+                        size: 28,
+                      ),
                       tooltip: 'Menu',
                       onPressed: _showMenu,
                     ),
@@ -630,94 +651,98 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
           Expanded(
             child: Container(
               color: AppColors.background,
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Parking Slots',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 30),
-
-                      // Entry Label
-                      Center(
-                        child: Column(
-                          children: [
-                            const Text(
-                              'ENTRY',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.black54,
-                                letterSpacing: 1,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Icon(
-                              Icons.keyboard_arrow_down,
-                              color: Colors.grey.shade400,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      const SizedBox(height: 30),
-
-                      // Parking Slots Grid
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              child: Consumer<BookingProvider>(
+                builder: (context, provider, child) {
+                  return SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Left Column
-                          Expanded(
-                            child: Column(
-                              children: [
-                                _buildParkingSlot('A1', true),
-                                const SizedBox(height: 40),
-                                _buildParkingSlot('A3', true),
-                                const SizedBox(height: 40),
-                                _buildParkingSlot('A5', true),
-                              ],
+                          const Text(
+                            'Parking Slots',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
                             ),
                           ),
+                          const SizedBox(height: 30),
 
-                          // Center Road
-                          SizedBox(
-                            width: 60,
+                          // Entry Label
+                          Center(
                             child: Column(
                               children: [
-                                Container(
-                                  height: 400,
-                                  width: 3,
-                                  color: Colors.grey.shade300,
+                                const Text(
+                                  'ENTRY',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black54,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Icon(
+                                  Icons.keyboard_arrow_down,
+                                  color: Colors.grey.shade400,
                                 ),
                               ],
                             ),
                           ),
 
-                          // Right Column
-                          Expanded(
-                            child: Column(
-                              children: [
-                                _buildParkingSlot('A2', true),
-                                const SizedBox(height: 40),
-                                _buildParkingSlot('A4', true),
-                                const SizedBox(height: 40),
-                                _buildParkingSlot('A6', true),
-                              ],
-                            ),
+                          const SizedBox(height: 30),
+
+                          // Parking Slots Grid
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              // Left Column
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    _buildParkingSlot(provider, 'A1'),
+                                    const SizedBox(height: 40),
+                                    _buildParkingSlot(provider, 'A3'),
+                                    const SizedBox(height: 40),
+                                    _buildParkingSlot(provider, 'A5'),
+                                  ],
+                                ),
+                              ),
+
+                              // Center Road
+                              SizedBox(
+                                width: 60,
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      height: 400,
+                                      width: 3,
+                                      color: Colors.grey.shade300,
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // Right Column
+                              Expanded(
+                                child: Column(
+                                  children: [
+                                    _buildParkingSlot(provider, 'A2'),
+                                    const SizedBox(height: 40),
+                                    _buildParkingSlot(provider, 'A4'),
+                                    const SizedBox(height: 40),
+                                    _buildParkingSlot(provider, 'A6'),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
             ),
           ),
@@ -726,12 +751,37 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
     );
   }
 
-  Widget _buildParkingSlot(String slotId, bool isAvailable) {
-    // Check if this slot is booked
-    final isBooked = bookedSlots.containsKey(slotId);
+  Widget _buildParkingSlot(BookingProvider provider, String slotId) {
+    final spot = provider.getSpotById(slotId);
+    final activeBooking = provider.activeBookings.firstWhere(
+      (b) => b.slotId == slotId,
+      orElse: () => Booking(
+        id: '',
+        userId: '',
+        slotId: '',
+        duration: 0,
+        reservedAt: DateTime.now(),
+        expiresAt: DateTime.now(),
+        status: 'none',
+        qrCode: '',
+      ),
+    );
+    final hasActiveBooking = activeBooking.status == 'active';
     final isBookedByCurrentUser =
-        isBooked && bookedSlots[slotId]?.userId == _userId;
-    final actuallyAvailable = isAvailable && !isBooked;
+        hasActiveBooking && activeBooking.userId == _userId;
+    final isAvailable = spot?.isAvailable ?? true;
+    final actuallyAvailable = isAvailable;
+    final isBooked = !isAvailable || hasActiveBooking;
+    final showCancel = isBookedByCurrentUser;
+
+    final nextBooking = spot?.nextBooking;
+    String? nextBookingText;
+    if (nextBooking != null && actuallyAvailable) {
+      final start = DateTime.parse(nextBooking!['start']);
+      final hour = start.hour.toString().padLeft(2, '0');
+      final minute = start.minute.toString().padLeft(2, '0');
+      nextBookingText = "Reserved at $hour:$minute";
+    }
 
     return Column(
       children: [
@@ -744,7 +794,7 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: actuallyAvailable
-                  ? AppColors.border
+                  ? (nextBookingText != null ? Colors.amber : AppColors.border)
                   : (isBooked ? AppColors.success : AppColors.warning),
               width: 2,
             ),
@@ -790,35 +840,50 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
 
               // Book Button or Status
               if (actuallyAvailable)
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () => _showBookingDialog(slotId),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                      foregroundColor: AppColors.textWhite,
-                      padding: const EdgeInsets.symmetric(
-                        vertical: 8,
-                        horizontal: 16,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                Column(
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () => _showBookingDialog(slotId),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.success,
+                          foregroundColor: AppColors.textWhite,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 8,
+                            horizontal: 16,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text(
+                          'BOOK',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1,
+                          ),
+                        ),
                       ),
                     ),
-                    child: const Text(
-                      'BOOK',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
+                    if (nextBookingText != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        nextBookingText,
+                        style: TextStyle(
+                          color: Colors.amber[800],
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                  ),
+                    ],
+                  ],
                 )
               else if (isBooked)
                 Column(
                   children: [
-                    if (isBookedByCurrentUser)
+                    if (showCancel)
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
@@ -844,8 +909,8 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
                           ),
                         ),
                       ),
-                    if (isBookedByCurrentUser) const SizedBox(height: 8),
-                    if (!isBookedByCurrentUser)
+                    if (showCancel) const SizedBox(height: 8),
+                    if (!showCancel)
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(vertical: 8),
@@ -920,38 +985,54 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
     if (confirmed == true) {
       final cancelledSpot = bookedSlots[slotId];
 
-      setState(() {
-        bookedSlots.remove(slotId);
-      });
-
-      // Update global bookings
-      await _saveGlobalBookings();
-
-      // Mark booking as cancelled in reservation history
       if (cancelledSpot != null) {
-        await _markBookingAsCancelled(cancelledSpot);
-      }
+        // Use the proper cancellation method from BookingProvider
+        final provider = Provider.of<BookingProvider>(context, listen: false);
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Booking for slot $slotId has been cancelled'),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        // Find the booking ID for this slot
+        try {
+          final booking = provider.bookings.firstWhere(
+            (b) => b.slotId == slotId && b.status == 'active',
+          );
+
+          // Cancel via backend API
+          await provider.cancelBooking(booking.id);
+        } catch (e) {
+          // If booking not found in provider, just remove locally
+          print('⚠️ Booking not found in provider, removing locally only');
+        }
+
+        // Remove from local map
+        setState(() {
+          bookedSlots.remove(slotId);
+        });
+
+        // Update global bookings
+        await _saveGlobalBookings();
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Booking for slot $slotId has been cancelled'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
       }
     }
   }
 
   Future<void> _showBookingDialog(String slotId) async {
-    // Validation: Check if slot is already booked
-    if (bookedSlots.containsKey(slotId)) {
+    final provider = Provider.of<BookingProvider>(context, listen: false);
+    final spot = provider.getSpotById(slotId);
+    final isBooked = spot != null
+        ? !spot.isAvailable
+        : bookedSlots.containsKey(slotId);
+    if (isBooked) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Slot $slotId is already booked by ${bookedSlots[slotId]?.userName ?? "someone"}',
-            ),
+            content: Text('Slot $slotId is already booked'),
             backgroundColor: Colors.red,
             action: SnackBarAction(
               label: 'REFRESH',
@@ -964,17 +1045,17 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
       return;
     }
 
-    // Validation: Check if user already has an active booking
-    final userActiveBookings = bookedSlots.values
-        .where((spot) => spot.userId == _userId && !spot.isExpired)
+    final userActiveBookings = provider.activeBookings
+        .where((b) => b.userId == _userId)
         .toList();
+
     if (userActiveBookings.isNotEmpty) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('Active Booking Exists'),
           content: Text(
-            'You already have an active booking for slot ${userActiveBookings.first.name}. '
+            'You already have an active booking for slot ${userActiveBookings.first.slotId}. '
             'Do you want to book another slot?',
           ),
           actions: [
@@ -994,12 +1075,14 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
     }
 
     // Show time selection dialog
-    final selectedHours = await showDialog<int>(
+    final selection = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => TimeSelectionDialog(spotName: slotId),
     );
 
-    if (selectedHours != null) {
+    if (selection != null) {
+      final int selectedHours = selection['duration'] as int;
+      final DateTime startTime = selection['startTime'] as DateTime;
       try {
         // Create booking via backend API
         final provider = Provider.of<BookingProvider>(context, listen: false);
@@ -1007,6 +1090,7 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
           slotId: slotId,
           userId: _userId,
           durationHours: selectedHours,
+          startTime: startTime,
         );
 
         if (result['success'] != true) {
@@ -1023,7 +1107,7 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
         }
 
         final booking = result['booking'];
-        final now = DateTime.now();
+        final now = startTime;
         final spot = ParkingSpot(
           id: slotId,
           name: slotId,
@@ -1103,25 +1187,6 @@ class _ParkingHomeScreenState extends State<ParkingHomeScreen> {
     historyJson.add(spotJson);
 
     await prefs.setStringList('reservationHistory', historyJson);
-  }
-
-  Future<void> _markBookingAsCancelled(ParkingSpot spot) async {
-    final prefs = await SharedPreferences.getInstance();
-    final historyJson = prefs.getStringList('reservationHistory') ?? [];
-
-    // Find and update the booking to mark it as cancelled
-    final updatedHistory = historyJson.map((json) {
-      final parts = json.split('|');
-      final qrCode = parts.length > 4 ? parts[4] : '';
-
-      if (qrCode == spot.qrCode) {
-        // Add cancelled flag (true) at the end
-        return '$json|true';
-      }
-      return json;
-    }).toList();
-
-    await prefs.setStringList('reservationHistory', updatedHistory);
   }
 }
 

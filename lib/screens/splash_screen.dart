@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth/login_screen.dart';
 import 'main/parking_home_screen.dart';
+import '../services/api_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -11,7 +12,8 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
   late AnimationController _fadeController;
   late AnimationController _carController;
   late Animation<double> _fadeAnimation;
@@ -20,39 +22,71 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   @override
   void initState() {
     super.initState();
-    
+
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
     );
-    
+
     _carController = AnimationController(
       duration: const Duration(seconds: 2),
       vsync: this,
     )..repeat(reverse: true);
-    
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _fadeController, curve: Curves.easeIn),
-    );
-    
-    _carSlideAnimation = Tween<double>(begin: -20.0, end: 20.0).animate(
-      CurvedAnimation(parent: _carController, curve: Curves.easeInOut),
-    );
-    
+
+    _fadeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _fadeController, curve: Curves.easeIn));
+
+    _carSlideAnimation = Tween<double>(
+      begin: -20.0,
+      end: 20.0,
+    ).animate(CurvedAnimation(parent: _carController, curve: Curves.easeInOut));
+
     _fadeController.forward();
-    
-    Timer(const Duration(seconds: 10), () async {
+
+    Timer(const Duration(seconds: 3), () async {
       if (mounted) {
-        final prefs = await SharedPreferences.getInstance();
-        final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
-        
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => isLoggedIn ? const ParkingHomeScreen() : const LoginScreen(),
-          ),
-        );
+        await _checkAuthAndNavigate();
       }
     });
+  }
+
+  Future<void> _checkAuthAndNavigate() async {
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    print('🔍 SPLASH SCREEN - Checking Auth');
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+
+    bool isAuthenticated = false;
+
+    if (token != null && token.isNotEmpty) {
+      print('🔑 Token found in storage: ${token.substring(0, 20)}...');
+
+      // Reload token into ApiService
+      ApiService.setToken(token);
+      print('✅ Token reloaded into ApiService');
+      print('✅ isAuthenticated: ${ApiService.isAuthenticated}');
+
+      isAuthenticated = true;
+    } else {
+      print('❌ No token found in storage');
+      print('❌ User needs to login');
+    }
+
+    print('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+    // Navigate based on authentication status
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) =>
+              isAuthenticated ? const ParkingHomeScreen() : const LoginScreen(),
+        ),
+      );
+    }
   }
 
   @override

@@ -288,8 +288,10 @@
         let successCount = 0;
         let failCount = 0;
 
-        // Auto-detect API URL based on current page URL
-        const API_BASE_URL = window.location.origin;
+        // Auto-detect API URL or use production
+        const API_BASE_URL = window.location.hostname === 'localhost' || window.location.protocol === 'file:' 
+            ? 'https://parking-intelligent-backend.onrender.com' 
+            : window.location.origin;
 
         function selectGate(gate) {
             currentGate = gate;

@@ -1,0 +1,1271 @@
+require("dotenv").config();
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const http = require("http");
+const socketIO = require("socket.io");
+const { v4: uuidv4 } = require("uuid");
+
+// Import models
+const User = require("./models/User");
+const Booking = require("./models/Booking");
+const ParkingSlot = require("./models/ParkingSlot");
+
+// Import middleware
+const {
+  authenticate,
+  optionalAuth,
+  generateToken,
+  setFallbackStorage,
+} = require("./middleware/auth");
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIO(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+const PORT = process.env.PORT || 3000;
+const MONGODB_URI =
+  process.env.MONGODB_URI || "mongodb://localhost:27017/parking_intelligent";
+
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// Fallback in-memory storage (if MongoDB fails)
+let useFallbackStorage = false;
+let memoryUsers = [];
+let memoryBookings = [];
+let memorySlots = [];
+
+// MongoDB Connection
+mongoose
+  .connect(MONGODB_URI)
+  .then(async () => {
+    console.log("✅ MongoDB connected successfully");
+    // Initialize parking slots if empty
+    await ParkingSlot.initializeSlots();
+    // Set auth middleware to use MongoDB
+    setFallbackStorage(false, memoryUsers);
+  })
+  .catch((err) => {
+    console.error("❌ MongoDB connection error:", err.message);
+    console.log("⚠️  Falling back to in-memory storage");
+    // Fallback to in-memory if MongoDB fails
+    useFallbackStorage = true;
+    initMemorySlots();
+    // Set auth middleware to use fallback storage
+    setFallbackStorage(true, memoryUsers);
+  });
+
+// Initialize in-memory slots
+const initMemorySlots = () => {
+  memorySlots = [];
+  for (let i = 1; i <= 6; i++) {
+    memorySlots.push({
+      id: `A${i}`,
+      status: "available",
+      bookedBy: null,
+      bookingId: null,
+    });
+  }
+};
+
+// WebSocket connection handling
+io.on("connection", (socket) => {
+  console.log("🔌 Client connected:", socket.id);
+
+  socket.on("disconnect", () => {
+    console.log("🔌 Client disconnected:", socket.id);
+  });
+
+  socket.on("subscribe-slots", () => {
+    socket.join("parking-slots");
+    console.log("📡 Client subscribed to parking slots updates");
+  });
+});
+
+// Emit slot updates to all connected clients
+const broadcastSlotUpdate = async () => {
+  try {
+    const slots = await getSlotsWithStatus();
+    io.to("parking-slots").emit("slots-updated", { slots });
+  } catch (error) {
+    console.error("Error broadcasting slot update:", error);
+  }
+};
+
+// Helper function to get slots with current status
+const getSlotsWithStatus = async () => {
+  const now = new Date();
+
+  if (useFallbackStorage) {
+    return memorySlots.map((slot) => {
+      const booking = memoryBookings.find(
+        (b) =>
+          b.slotId === slot.id &&
+          ["active", "occupied"].includes(b.status) &&
+          new Date(b.reservedAt) <= now &&
+          new Date(b.expiresAt) >= now,
+      );
+
+      let status = "available";
+      let bookedBy = null;
+      let bookingId = null;
+
+      if (booking) {
+        status = booking.enteredAt ? "occupied" : "booked";
+        bookedBy = booking.userId;
+        bookingId = booking.id;
+      }
+
+      return { ...slot, status, bookedBy, bookingId };
+    });
+  }
+
+  const slots = await ParkingSlot.find({ isActive: true }).lean();
+  const slotsWithStatus = [];
+
+  for (const slot of slots) {
+    // Get current booking (active during this time)
+    const currentBooking = await Booking.getCurrentBookingForSlot(slot.id);
+
+    // Get next booking (future)
+    const nextBooking = await Booking.getNextBookingForSlot(slot.id);
+
+    let status = "available";
+    let bookedBy = null;
+    let bookingId = null;
+    let nextBookingInfo = null;
+
+    if (currentBooking) {
+      status = currentBooking.enteredAt ? "occupied" : "booked";
+      bookedBy = currentBooking.userId;
+      bookingId = currentBooking._id;
+    }
+
+    if (nextBooking && !currentBooking) {
+      nextBookingInfo = {
+        start: nextBooking.reservedAt,
+        end: nextBooking.expiresAt,
+        userId: nextBooking.userId,
+      };
+    }
+
+    slotsWithStatus.push({
+      id: slot.id,
+      status,
+      bookedBy,
+      bookingId,
+      nextBooking: nextBookingInfo,
+    });
+  }
+
+  return slotsWithStatus;
+};
+
+// Routes
+
+// Serve QR Scanner Test Page
+app.get("/scanner", (req, res) => {
+  res.sendFile(__dirname + "/qr-scanner-test.html");
+});
+
+// Health check
+app.get("/", (req, res) => {
+  res.json({
+    message: "Smart Car Parking API is running",
+    version: "2.0.0",
+    timestamp: new Date().toISOString(),
+    database: useFallbackStorage ? "In-Memory (Fallback)" : "MongoDB",
+    features: [
+      "JWT Authentication",
+      "Password Hashing",
+      "WebSocket Real-time Updates",
+      "Time-based Slot Availability",
+      "Future Booking Support",
+    ],
+    scanner: "http://" + req.get("host") + "/scanner",
+  });
+});
+
+// Reset all data (for testing) - DANGEROUS in production!
+app.post("/api/reset", async (req, res) => {
+  console.log("🔄 Resetting all data...");
+
+  try {
+    if (useFallbackStorage) {
+      memoryUsers = [];
+      memoryBookings = [];
+      initMemorySlots();
+    } else {
+      await User.deleteMany({});
+      await Booking.deleteMany({});
+      await ParkingSlot.deleteMany({});
+      await ParkingSlot.initializeSlots();
+    }
+
+    console.log("✅ All data reset successfully");
+    await broadcastSlotUpdate();
+
+    res.json({
+      success: true,
+      message: "All data reset successfully",
+    });
+  } catch (error) {
+    console.error("Error resetting data:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to reset data",
+    });
+  }
+});
+
+// ==================== AUTH ROUTES ====================
+
+// Register
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Email and password are required",
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "Password must be at least 6 characters",
+      });
+    }
+
+    if (useFallbackStorage) {
+      const existingUser = memoryUsers.find((u) => u.email === email);
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          error: "User already exists",
+        });
+      }
+
+      const user = {
+        id: uuidv4(),
+        email,
+        password, // Not hashed in fallback mode
+        name: name || email.split("@")[0],
+        createdAt: new Date().toISOString(),
+      };
+
+      memoryUsers.push(user);
+
+      const token = generateToken(user.id);
+
+      return res.status(201).json({
+        success: true,
+        message: "User registered successfully",
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        },
+      });
+    }
+
+    // Check if user exists
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        error: "User already exists",
+      });
+    }
+
+    // Create user (password hashed automatically by model)
+    const user = new User({
+      email: email.toLowerCase(),
+      password,
+      name: name || email.split("@")[0],
+    });
+
+    await user.save();
+
+    // Generate token
+    const token = generateToken(user._id);
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      token,
+      user: user.toJSON(),
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Registration failed",
+    });
+  }
+});
+
+// Login
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "Email and password are required",
+      });
+    }
+
+    if (useFallbackStorage) {
+      const user = memoryUsers.find(
+        (u) => u.email === email && u.password === password,
+      );
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Invalid credentials",
+        });
+      }
+
+      const token = generateToken(user.id);
+
+      return res.json({
+        success: true,
+        message: "Login successful",
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+        },
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    // Compare password
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    // Generate token
+    const token = generateToken(user._id);
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      token,
+      user: user.toJSON(),
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Login failed",
+    });
+  }
+});
+
+// Verify token (optional, for checking if token is still valid)
+app.get("/api/auth/verify", authenticate, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user.toJSON(),
+  });
+});
+
+// ==================== PARKING SLOTS ROUTES ====================
+
+// Get all parking slots with real-time status
+app.get("/api/parking/slots", async (req, res) => {
+  try {
+    const slots = await getSlotsWithStatus();
+
+    res.json({
+      success: true,
+      slots,
+    });
+  } catch (error) {
+    console.error("Error fetching slots:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch parking slots",
+    });
+  }
+});
+
+// Update slot status (admin only - add auth later)
+app.patch("/api/parking/slots/:slotId", async (req, res) => {
+  try {
+    const { slotId } = req.params;
+    const { status } = req.body;
+
+    if (!["available", "occupied", "booked", "maintenance"].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status",
+      });
+    }
+
+    if (useFallbackStorage) {
+      const slot = memorySlots.find((s) => s.id === slotId);
+
+      if (!slot) {
+        return res.status(404).json({
+          success: false,
+          error: "Slot not found",
+        });
+      }
+
+      slot.status = status;
+
+      await broadcastSlotUpdate();
+
+      return res.json({
+        success: true,
+        message: "Slot updated successfully",
+        slot,
+      });
+    }
+
+    const slot = await ParkingSlot.findOne({ id: slotId });
+
+    if (!slot) {
+      return res.status(404).json({
+        success: false,
+        error: "Slot not found",
+      });
+    }
+
+    slot.status = status;
+    await slot.save();
+
+    await broadcastSlotUpdate();
+
+    res.json({
+      success: true,
+      message: "Slot updated successfully",
+      slot,
+    });
+  } catch (error) {
+    console.error("Error updating slot:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update slot",
+    });
+  }
+});
+
+// ==================== BOOKING ROUTES ====================
+
+// Create booking with time-based validation
+app.post("/api/bookings", authenticate, async (req, res) => {
+  try {
+    const { slotId, duration, startTime } = req.body;
+    const userId = req.userId;
+
+    if (!slotId || !duration) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: slotId and duration",
+      });
+    }
+
+    if (duration < 1 || duration > 24) {
+      return res.status(400).json({
+        success: false,
+        error: "Duration must be between 1 and 24 hours",
+      });
+    }
+
+    // Calculate start and end times
+    const start = startTime ? new Date(startTime) : new Date();
+    const end = new Date(start.getTime() + duration * 60 * 60 * 1000);
+
+    console.log(
+      `📅 Booking request: Slot ${slotId}, ${start.toISOString()} to ${end.toISOString()}`,
+    );
+
+    if (useFallbackStorage) {
+      // Fallback memory storage logic
+      const slot = memorySlots.find((s) => s.id === slotId);
+
+      if (!slot) {
+        return res.status(404).json({
+          success: false,
+          error: "Slot not found",
+        });
+      }
+
+      // Check availability
+      const conflicting = memoryBookings.find(
+        (b) =>
+          b.slotId === slotId &&
+          ["active", "occupied"].includes(b.status) &&
+          start < new Date(b.expiresAt) &&
+          end > new Date(b.reservedAt),
+      );
+
+      if (conflicting) {
+        return res.status(409).json({
+          success: false,
+          error: "Slot is not available for the selected time",
+        });
+      }
+
+      const booking = {
+        id: uuidv4(),
+        userId: userId.toString(),
+        slotId,
+        duration,
+        reservedAt: start.toISOString(),
+        expiresAt: end.toISOString(),
+        status: "active",
+        qrCode: `PARKING-${uuidv4()}`,
+        enteredAt: null,
+        exitedAt: null,
+      };
+
+      memoryBookings.push(booking);
+
+      await broadcastSlotUpdate();
+
+      return res.status(201).json({
+        success: true,
+        message: "Booking created successfully",
+        booking,
+      });
+    }
+
+    // Check if slot exists
+    const slot = await ParkingSlot.findOne({ id: slotId, isActive: true });
+
+    if (!slot) {
+      return res.status(404).json({
+        success: false,
+        error: "Slot not found",
+      });
+    }
+
+    // Check time-based availability (CRITICAL FIX for your bug!)
+    const isAvailable = await Booking.isSlotAvailable(slotId, start, end);
+
+    if (!isAvailable) {
+      return res.status(409).json({
+        success: false,
+        error:
+          "Slot is not available for the selected time. Please choose another time or slot.",
+      });
+    }
+
+    // Create booking
+    const booking = new Booking({
+      userId,
+      slotId,
+      duration,
+      reservedAt: start,
+      expiresAt: end,
+      status: "active",
+      qrCode: `PARKING-${uuidv4()}`,
+    });
+
+    await booking.save();
+
+    console.log(`✅ Booking created: ${booking.qrCode} for slot ${slotId}`);
+
+    // Broadcast update
+    await broadcastSlotUpdate();
+
+    res.status(201).json({
+      success: true,
+      message: "Booking created successfully",
+      booking: {
+        id: booking._id,
+        userId: booking.userId,
+        slotId: booking.slotId,
+        duration: booking.duration,
+        reservedAt: booking.reservedAt,
+        expiresAt: booking.expiresAt,
+        status: booking.status,
+        qrCode: booking.qrCode,
+      },
+    });
+  } catch (error) {
+    console.error("Booking creation error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to create booking",
+    });
+  }
+});
+
+// Get user bookings
+app.get("/api/bookings/user/:userId", authenticate, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Check if user is requesting their own bookings
+    if (req.userId.toString() !== userId && !useFallbackStorage) {
+      return res.status(403).json({
+        success: false,
+        error: "You can only view your own bookings",
+      });
+    }
+
+    if (useFallbackStorage) {
+      const userBookings = memoryBookings.filter((b) => b.userId === userId);
+
+      return res.json({
+        success: true,
+        count: userBookings.length,
+        bookings: userBookings,
+      });
+    }
+
+    const bookings = await Booking.find({ userId }).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      count: bookings.length,
+      bookings,
+    });
+  } catch (error) {
+    console.error("Error fetching bookings:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch bookings",
+    });
+  }
+});
+
+// Get booking by ID
+app.get("/api/bookings/:bookingId", authenticate, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    if (useFallbackStorage) {
+      const booking = memoryBookings.find((b) => b.id === bookingId);
+
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          error: "Booking not found",
+        });
+      }
+
+      return res.json({
+        success: true,
+        booking,
+      });
+    }
+
+    const booking = await Booking.findById(bookingId);
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
+
+    // Check if user owns this booking
+    if (req.userId.toString() !== booking.userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        error: "Access denied",
+      });
+    }
+
+    res.json({
+      success: true,
+      booking,
+    });
+  } catch (error) {
+    console.error("Error fetching booking:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch booking",
+    });
+  }
+});
+
+// Cancel booking
+app.delete("/api/bookings/:bookingId", authenticate, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    if (useFallbackStorage) {
+      const bookingIndex = memoryBookings.findIndex((b) => b.id === bookingId);
+
+      if (bookingIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          error: "Booking not found",
+        });
+      }
+
+      const booking = memoryBookings[bookingIndex];
+
+      // Free the slot
+      const slot = memorySlots.find((s) => s.id === booking.slotId);
+      if (slot) {
+        slot.status = "available";
+        slot.bookedBy = null;
+        slot.bookingId = null;
+      }
+
+      // Remove booking
+      memoryBookings.splice(bookingIndex, 1);
+
+      await broadcastSlotUpdate();
+
+      return res.json({
+        success: true,
+        message: "Booking cancelled successfully",
+      });
+    }
+
+    const booking = await Booking.findById(bookingId);
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
+
+    // Check if user owns this booking
+    if (req.userId.toString() !== booking.userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        error: "You can only cancel your own bookings",
+      });
+    }
+
+    // Update booking status
+    booking.status = "cancelled";
+    await booking.save();
+
+    // Free the slot if currently booked
+    const slot = await ParkingSlot.findOne({ id: booking.slotId });
+    if (
+      slot &&
+      slot.currentBookingId &&
+      slot.currentBookingId.toString() === bookingId
+    ) {
+      await slot.free();
+    }
+
+    await broadcastSlotUpdate();
+
+    console.log(`❌ Booking cancelled: ${booking.qrCode}`);
+
+    res.json({
+      success: true,
+      message: "Booking cancelled successfully",
+    });
+  } catch (error) {
+    console.error("Error cancelling booking:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to cancel booking",
+    });
+  }
+});
+
+// ==================== ENTRY/EXIT GATE ROUTES ====================
+
+// Entry gate QR verification
+app.post("/api/parking/entry", async (req, res) => {
+  try {
+    const { qrCode } = req.body;
+
+    if (!qrCode) {
+      return res.status(400).json({
+        valid: false,
+        message: "QR code is required",
+        action: "deny",
+      });
+    }
+
+    console.log(`🚗 Entry gate: Scanning QR ${qrCode}`);
+
+    if (useFallbackStorage) {
+      const booking = memoryBookings.find(
+        (b) => b.qrCode === qrCode && b.status === "active",
+      );
+
+      if (!booking) {
+        return res.status(404).json({
+          valid: false,
+          message: "Invalid QR code or booking not found",
+          action: "deny",
+        });
+      }
+
+      if (booking.enteredAt) {
+        return res.status(409).json({
+          valid: false,
+          message: "Already entered. Use this QR code at exit.",
+          action: "deny",
+        });
+      }
+
+      const now = new Date();
+      if (now < new Date(booking.reservedAt)) {
+        return res.status(403).json({
+          valid: false,
+          message: `Booking starts at ${new Date(booking.reservedAt).toLocaleTimeString()}. Too early!`,
+          action: "deny",
+        });
+      }
+
+      if (now > new Date(booking.expiresAt)) {
+        booking.status = "expired";
+        return res.status(403).json({
+          valid: false,
+          message: "QR code expired",
+          action: "deny",
+        });
+      }
+
+      booking.enteredAt = now.toISOString();
+      const slot = memorySlots.find((s) => s.id === booking.slotId);
+      if (slot) {
+        slot.status = "occupied";
+      }
+
+      await broadcastSlotUpdate();
+
+      return res.json({
+        valid: true,
+        message: "Access granted - Welcome!",
+        action: "open_gate",
+        slotId: booking.slotId,
+        slotName: booking.slotId,
+        expiresAt: booking.expiresAt,
+        duration: booking.duration,
+      });
+    }
+
+    // Find active booking
+    const booking = await Booking.findOne({ qrCode, status: "active" });
+
+    if (!booking) {
+      return res.status(404).json({
+        valid: false,
+        message: "Invalid QR code or booking not found",
+        action: "deny",
+      });
+    }
+
+    // Check if already entered
+    if (booking.enteredAt) {
+      return res.status(409).json({
+        valid: false,
+        message: "Already entered. Use this QR code at exit.",
+        action: "deny",
+      });
+    }
+
+    // Check if too early (CRITICAL FIX!)
+    const now = new Date();
+    if (now < booking.reservedAt) {
+      const startTime = booking.reservedAt.toLocaleTimeString();
+      return res.status(403).json({
+        valid: false,
+        message: `Booking starts at ${startTime}. Too early!`,
+        action: "deny",
+        reservedAt: booking.reservedAt,
+      });
+    }
+
+    // Check if expired
+    if (now > booking.expiresAt) {
+      booking.status = "expired";
+      await booking.save();
+      return res.status(403).json({
+        valid: false,
+        message: "QR code expired",
+        action: "deny",
+      });
+    }
+
+    // Mark as entered
+    booking.enteredAt = now;
+    booking.status = "occupied";
+    await booking.save();
+
+    // Update slot status
+    const slot = await ParkingSlot.findOne({ id: booking.slotId });
+    if (slot) {
+      await slot.updateStatus("occupied", booking._id, booking.userId);
+    }
+
+    await broadcastSlotUpdate();
+
+    console.log(`✅ Entry granted for slot ${booking.slotId}`);
+
+    res.json({
+      valid: true,
+      message: "Access granted - Welcome!",
+      action: "open_gate",
+      slotId: booking.slotId,
+      slotName: booking.slotId,
+      expiresAt: booking.expiresAt,
+      duration: booking.duration,
+    });
+  } catch (error) {
+    console.error("Entry gate error:", error);
+    res.status(500).json({
+      valid: false,
+      message: "System error",
+      action: "deny",
+    });
+  }
+});
+
+// Exit gate QR verification
+app.post("/api/parking/exit", async (req, res) => {
+  try {
+    const { qrCode } = req.body;
+
+    if (!qrCode) {
+      return res.status(400).json({
+        valid: false,
+        message: "QR code is required",
+        action: "deny",
+      });
+    }
+
+    console.log(`🚗 Exit gate: Scanning QR ${qrCode}`);
+
+    if (useFallbackStorage) {
+      const booking = memoryBookings.find((b) => b.qrCode === qrCode);
+
+      if (!booking) {
+        return res.status(404).json({
+          valid: false,
+          message: "Invalid QR code",
+          action: "deny",
+        });
+      }
+
+      if (!booking.enteredAt) {
+        return res.status(400).json({
+          valid: false,
+          message: "Please use entry gate first",
+          action: "deny",
+        });
+      }
+
+      if (booking.exitedAt) {
+        return res.status(409).json({
+          valid: false,
+          message: "Already exited",
+          action: "deny",
+        });
+      }
+
+      const now = new Date();
+      booking.exitedAt = now.toISOString();
+      booking.status = "completed";
+
+      const slot = memorySlots.find((s) => s.id === booking.slotId);
+      if (slot) {
+        slot.status = "available";
+        slot.bookedBy = null;
+        slot.bookingId = null;
+      }
+
+      const entryTime = new Date(booking.enteredAt);
+      const exitTime = now;
+      const actualDuration = Math.round((exitTime - entryTime) / (1000 * 60));
+
+      await broadcastSlotUpdate();
+
+      return res.json({
+        valid: true,
+        message: "Exit granted - Thank you!",
+        action: "open_gate",
+        slotId: booking.slotId,
+        slotName: booking.slotId,
+        enteredAt: booking.enteredAt,
+        exitedAt: booking.exitedAt,
+        actualDuration: `${actualDuration} minutes`,
+        bookedDuration: `${booking.duration} hours`,
+      });
+    }
+
+    // Find booking
+    const booking = await Booking.findOne({ qrCode });
+
+    if (!booking) {
+      return res.status(404).json({
+        valid: false,
+        message: "Invalid QR code",
+        action: "deny",
+      });
+    }
+
+    // Check if entered
+    if (!booking.enteredAt) {
+      return res.status(400).json({
+        valid: false,
+        message: "Please use entry gate first",
+        action: "deny",
+      });
+    }
+
+    // Check if already exited
+    if (booking.exitedAt) {
+      return res.status(409).json({
+        valid: false,
+        message: "Already exited",
+        action: "deny",
+      });
+    }
+
+    // Mark as exited
+    const now = new Date();
+    booking.exitedAt = now;
+    booking.status = "completed";
+    await booking.save();
+
+    // Free the slot
+    const slot = await ParkingSlot.findOne({ id: booking.slotId });
+    if (slot) {
+      await slot.free();
+    }
+
+    await broadcastSlotUpdate();
+
+    // Calculate duration
+    const actualDuration = Math.round((now - booking.enteredAt) / (1000 * 60));
+
+    console.log(
+      `✅ Exit granted for slot ${booking.slotId}, duration: ${actualDuration} minutes`,
+    );
+
+    res.json({
+      valid: true,
+      message: "Exit granted - Thank you!",
+      action: "open_gate",
+      slotId: booking.slotId,
+      slotName: booking.slotId,
+      enteredAt: booking.enteredAt,
+      exitedAt: booking.exitedAt,
+      actualDuration: `${actualDuration} minutes`,
+      bookedDuration: `${booking.duration} hours`,
+    });
+  } catch (error) {
+    console.error("Exit gate error:", error);
+    res.status(500).json({
+      valid: false,
+      message: "System error",
+      action: "deny",
+    });
+  }
+});
+
+// ==================== STATISTICS ROUTE ====================
+
+// Get statistics
+app.get("/api/stats", async (req, res) => {
+  try {
+    if (useFallbackStorage) {
+      const stats = {
+        totalUsers: memoryUsers.length,
+        totalBookings: memoryBookings.length,
+        activeBookings: memoryBookings.filter((b) => b.status === "active")
+          .length,
+        completedBookings: memoryBookings.filter(
+          (b) => b.status === "completed",
+        ).length,
+        slots: {
+          total: memorySlots.length,
+          available: memorySlots.filter((s) => s.status === "available").length,
+          occupied: memorySlots.filter((s) => s.status === "occupied").length,
+          booked: memorySlots.filter((s) => s.status === "booked").length,
+        },
+      };
+
+      return res.json(stats);
+    }
+
+    const totalUsers = await User.countDocuments();
+    const totalBookings = await Booking.countDocuments();
+    const activeBookings = await Booking.countDocuments({ status: "active" });
+    const completedBookings = await Booking.countDocuments({
+      status: "completed",
+    });
+
+    const slots = await getSlotsWithStatus();
+    const slotStats = {
+      total: slots.length,
+      available: slots.filter((s) => s.status === "available").length,
+      occupied: slots.filter((s) => s.status === "occupied").length,
+      booked: slots.filter((s) => s.status === "booked").length,
+    };
+
+    res.json({
+      totalUsers,
+      totalBookings,
+      activeBookings,
+      completedBookings,
+      slots: slotStats,
+    });
+  } catch (error) {
+    console.error("Error fetching stats:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch statistics",
+    });
+  }
+});
+
+// ==================== ERROR HANDLING ====================
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: "Route not found",
+    path: req.path,
+  });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error("Global error:", err.stack);
+
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.message || "Something went wrong!",
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+  });
+});
+
+// ==================== BACKGROUND TASKS ====================
+
+// Auto-expire old bookings every minute
+setInterval(async () => {
+  try {
+    if (useFallbackStorage) {
+      const now = new Date();
+      memoryBookings.forEach((booking) => {
+        if (booking.status === "active" && now > new Date(booking.expiresAt)) {
+          booking.status = "expired";
+          console.log(`⏰ Auto-expired booking: ${booking.qrCode}`);
+        }
+      });
+    } else {
+      const now = new Date();
+      const expiredBookings = await Booking.updateMany(
+        {
+          status: "active",
+          expiresAt: { $lt: now },
+        },
+        {
+          $set: { status: "expired" },
+        },
+      );
+
+      if (expiredBookings.modifiedCount > 0) {
+        console.log(
+          `⏰ Auto-expired ${expiredBookings.modifiedCount} bookings`,
+        );
+        await broadcastSlotUpdate();
+      }
+    }
+  } catch (error) {
+    console.error("Error in auto-expire task:", error);
+  }
+}, 60000); // Run every minute
+
+// ==================== START SERVER ====================
+
+server.listen(PORT, () => {
+  console.log("\n========================================");
+  console.log("🚗 Smart Car Parking API Server v2.0");
+  console.log("========================================");
+  console.log(`📡 Server running on http://localhost:${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(
+    `💾 Database: ${useFallbackStorage ? "In-Memory (Fallback)" : "MongoDB"}`,
+  );
+  console.log(`⏰ Started at: ${new Date().toLocaleString()}`);
+  console.log(`🅿️  Parking: 1 floor, 6 slots (A1-A6)`);
+  console.log(`\n✨ New Features:`);
+  console.log(`   🔐 JWT Authentication`);
+  console.log(`   🔒 Password Hashing (bcrypt)`);
+  console.log(`   🔌 WebSocket Real-time Updates`);
+  console.log(`   📅 Time-based Slot Availability`);
+  console.log(`   🚀 Future Booking Support`);
+  console.log(`\n📋 Available endpoints:`);
+  console.log(`   GET    /                           - Health check`);
+  console.log(`   POST   /api/auth/register          - Register user`);
+  console.log(`   POST   /api/auth/login             - Login user`);
+  console.log(`   GET    /api/auth/verify            - Verify token`);
+  console.log(`   GET    /api/parking/slots          - Get all slots`);
+  console.log(`   POST   /api/bookings               - Create booking (auth)`);
+  console.log(
+    `   GET    /api/bookings/user/:userId  - Get user bookings (auth)`,
+  );
+  console.log(
+    `   GET    /api/bookings/:bookingId    - Get booking by ID (auth)`,
+  );
+  console.log(`   DELETE /api/bookings/:bookingId    - Cancel booking (auth)`);
+  console.log(`   PATCH  /api/parking/slots/:slotId  - Update slot status`);
+  console.log(
+    `   POST   /api/parking/entry          - 🚗 Entry gate QR verification`,
+  );
+  console.log(
+    `   POST   /api/parking/exit           - 🚗 Exit gate QR verification`,
+  );
+  console.log(`   GET    /api/stats                  - Get statistics`);
+  console.log(
+    `   POST   /api/reset                  - Reset all data (testing)`,
+  );
+  console.log("========================================\n");
+});
+
+// Handle graceful shutdown
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM signal received: closing HTTP server");
+  server.close(async () => {
+    console.log("HTTP server closed");
+    if (!useFallbackStorage) {
+      await mongoose.connection.close();
+      console.log("MongoDB connection closed");
+    }
+    process.exit(0);
+  });
+});

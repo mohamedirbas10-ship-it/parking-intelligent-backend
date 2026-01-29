@@ -19,6 +19,23 @@ Complete guide for setting up your parking system with 2x ESP32-CAM modules for 
 
 ### Complete Flow:
 
+```mermaid
+flowchart TD
+    A[Flutter App] -->|Book Slot| B[Backend Server]
+    B --> C[Database]
+    B -->|Generate QR| A
+    A -->|Show QR Code| D[ESP32-CAM Entry Gate]
+    D -->|IR Capture| E[QR Scanner]
+    E -->|Send Data| B
+    B -->|Validate| F[Servo Control]
+    F -->|Open Gate| G[Car Entry]
+    G --> H[ESP32-CAM Exit Gate]
+    H -->|IR Capture| I[QR Scanner]
+    I -->|Send Data| B
+    B -->|Process Exit| J[Servo Control]
+    J -->|Open Gate| K[Car Exit]
+```
+
 ```
 USER ARRIVES
     ↓

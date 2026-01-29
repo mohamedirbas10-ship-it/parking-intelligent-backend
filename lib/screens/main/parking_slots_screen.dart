@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/booking_provider.dart';
 import '../../services/notification_service.dart';
 import 'booking_history_screen.dart';
@@ -11,30 +12,42 @@ class ParkingSlotsScreen extends StatefulWidget {
   State<ParkingSlotsScreen> createState() => _ParkingSlotsScreenState();
 }
 
-class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProviderStateMixin {
-  final String userName = 'Mohamed'; // You can change this to any user name
-  final String userId = 'user_mohamed';
+class _ParkingSlotsScreenState extends State<ParkingSlotsScreen>
+    with TickerProviderStateMixin {
+  String userName = 'Guest';
+  String userId = 'guest_user';
   late AnimationController _refreshController;
-  
+
   @override
   void initState() {
     super.initState();
+    _loadUserData();
     _refreshController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
-    // Initialize notifications
-    NotificationService().initialize();
-    
+
     // Load user bookings from backend (with error handling)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final provider = Provider.of<BookingProvider>(context, listen: false);
-      provider.loadUserBookings(userId).catchError((error) {
-        print('⚠️ Could not load user bookings: $error');
+      // Wait for user data to be loaded before loading bookings
+      _loadUserData().then((_) {
+        provider.loadUserBookings(userId).catchError((error) {
+          print('⚠️ Could not load user bookings: $error');
+        });
       });
     });
   }
-  
+
+  Future<void> _loadUserData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      userName = prefs.getString('userName') ?? 'Guest';
+      // Use email as ID if available, otherwise default
+      userId = prefs.getString('userEmail') ?? 'guest_user';
+    });
+  }
+
   @override
   void dispose() {
     _refreshController.dispose();
@@ -90,6 +103,51 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
                       ),
                     ),
                     const Spacer(),
+                    // Refresh Button
+                    Consumer<BookingProvider>(
+                      builder: (context, provider, child) {
+                        return IconButton(
+                          icon: RotationTransition(
+                            turns: _refreshController,
+                            child: const Icon(
+                              Icons.refresh,
+                              color: Colors.white,
+                            ),
+                          ),
+                          tooltip: 'Refresh Bookings',
+                          onPressed: provider.isLoading
+                              ? null
+                              : () async {
+                                  _refreshController.repeat();
+                                  await provider.refreshBookingsAndSlots(
+                                    userId,
+                                  );
+                                  _refreshController.stop();
+                                  _refreshController.reset();
+
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.check_circle,
+                                              color: Colors.white,
+                                            ),
+                                            SizedBox(width: 8),
+                                            Text('Bookings refreshed!'),
+                                          ],
+                                        ),
+                                        backgroundColor: Colors.green,
+                                        duration: Duration(seconds: 2),
+                                        behavior: SnackBarBehavior.floating,
+                                      ),
+                                    );
+                                  }
+                                },
+                        );
+                      },
+                    ),
                     // History Button with badge
                     Consumer<BookingProvider>(
                       builder: (context, provider, child) {
@@ -97,13 +155,17 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
                         return Stack(
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.history, color: Colors.white),
+                              icon: const Icon(
+                                Icons.history,
+                                color: Colors.white,
+                              ),
                               tooltip: 'Booking History',
                               onPressed: () {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (context) => const BookingHistoryScreen(),
+                                    builder: (context) =>
+                                        const BookingHistoryScreen(),
                                   ),
                                 );
                               },
@@ -160,8 +222,10 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
               child: Consumer<BookingProvider>(
                 builder: (context, provider, child) {
                   final spots = provider.parkingSpots;
-                  final availableCount = spots.where((s) => s.isAvailable).length;
-                  
+                  final availableCount = spots
+                      .where((s) => s.isAvailable)
+                      .length;
+
                   return SingleChildScrollView(
                     child: Padding(
                       padding: const EdgeInsets.all(20),
@@ -298,14 +362,15 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
   Widget _buildParkingSlot(BookingProvider provider, String slotId) {
     final spot = provider.getSpotById(slotId);
     if (spot == null) return const SizedBox.shrink();
-    
+
     final isAvailable = spot.isAvailable;
-    
+
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
       curve: Curves.easeInOut,
       child: Semantics(
-        label: 'Parking slot $slotId, ${isAvailable ? "available" : "occupied"}',
+        label:
+            'Parking slot $slotId, ${isAvailable ? "available" : "occupied"}',
         button: isAvailable,
         child: Column(
           children: [
@@ -317,7 +382,9 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isAvailable ? Colors.green.shade300 : Colors.red.shade300,
+                  color: isAvailable
+                      ? Colors.green.shade300
+                      : Colors.red.shade300,
                   width: 2,
                 ),
                 boxShadow: [
@@ -376,7 +443,10 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
                   if (!isAvailable && spot.reservationTime != null) ...[
                     const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.orange.shade100,
                         borderRadius: BorderRadius.circular(8),
@@ -464,12 +534,14 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
 
   void _showBookingDialog(BookingProvider provider, String slotId) {
     int selectedHours = 2;
-    
+
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Row(
             children: [
               Icon(Icons.local_parking, color: Colors.blue.shade600),
@@ -491,10 +563,7 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
               const SizedBox(height: 20),
               const Text(
                 'Select Duration:',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -527,19 +596,19 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
             ElevatedButton.icon(
               onPressed: () async {
                 Navigator.pop(context);
-                
+
                 // Animate booking action
                 _refreshController.forward().then((_) {
                   _refreshController.reverse();
                 });
-                
+
                 // Create booking
                 final result = await provider.createBooking(
                   slotId: slotId,
                   userId: userId,
                   durationHours: selectedHours,
                 );
-                
+
                 if (mounted) {
                   if (result['success'] == true) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -567,7 +636,8 @@ class _ParkingSlotsScreenState extends State<ParkingSlotsScreen> with TickerProv
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => const BookingHistoryScreen(),
+                                builder: (context) =>
+                                    const BookingHistoryScreen(),
                               ),
                             );
                           },

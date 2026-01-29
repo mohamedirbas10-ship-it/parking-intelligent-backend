@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main/parking_home_screen.dart';
 import '../../widgets/animated_car_logo.dart';
+import '../../services/api_service.dart';
+import '../../models/user.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -19,6 +21,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
+  final ApiService _apiService = ApiService();
 
   @override
   void dispose() {
@@ -37,56 +40,76 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      // Offline registration - save to local storage
-      final prefs = await SharedPreferences.getInstance();
-      final registeredUsers = prefs.getStringList('registeredUsers') ?? [];
-      
       final name = _nameController.text.trim();
       final email = _emailController.text.trim();
       final password = _passwordController.text;
-      
-      // Check if email already exists
-      bool emailExists = false;
-      for (var userJson in registeredUsers) {
-        final parts = userJson.split('|');
-        if (parts.length >= 2 && parts[1] == email) {
-          emailExists = true;
-          break;
-        }
-      }
-      
-      if (emailExists) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Email already registered'),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      } else {
-        // Save new user
-        registeredUsers.add('$name|$email|$password');
-        await prefs.setStringList('registeredUsers', registeredUsers);
-        
-        // Save login session
+
+      print('🔵 Attempting registration for: $email');
+
+      // Call backend API
+      final result = await _apiService.register(
+        email: email,
+        password: password,
+        name: name,
+      );
+
+      if (result['success']) {
+        final data = result['data'];
+        final user = User.fromJson(data['user']);
+        final token = data['token'] as String;
+
+        print('✅ Registration successful! User: ${user.name}');
+        print('✅ Token received: ${token.substring(0, 20)}...');
+
+        // Save token and user data
+        final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('isLoggedIn', true);
-        await prefs.setString('userEmail', email);
-        await prefs.setString('userName', name);
+        await prefs.setString('token', token);
+        await prefs.setString('userId', user.id);
+        await prefs.setString('userEmail', user.email);
+        await prefs.setString('userName', user.name);
+
+        // Set token for API calls
+        ApiService.setToken(token);
 
         if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Welcome, ${user.name}!'),
+              backgroundColor: Colors.green,
+              duration: const Duration(seconds: 2),
+            ),
+          );
+
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(builder: (context) => const ParkingHomeScreen()),
           );
         }
+      } else {
+        // Registration failed
+        final error = result['error'] ?? 'Registration failed';
+        print('❌ Registration failed: $error');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
       }
     } catch (e) {
+      print('❌ Exception during registration: $e');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${e.toString()}'),
+            content: Text('Network error: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -102,18 +125,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     final isMobile = MediaQuery.of(context).size.width < 600;
-    
+
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
-            colors: [
-              Colors.blue.shade50,
-              Colors.white,
-              Colors.blue.shade50,
-            ],
+            colors: [Colors.blue.shade50, Colors.white, Colors.blue.shade50],
           ),
         ),
         child: SafeArea(
@@ -138,7 +157,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       backgroundColor: Colors.transparent,
                       elevation: 0,
                       leading: IconButton(
-                        icon: Icon(Icons.arrow_back, color: Colors.blue.shade600),
+                        icon: Icon(
+                          Icons.arrow_back,
+                          color: Colors.blue.shade600,
+                        ),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ),
@@ -162,7 +184,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
-                                colors: [Colors.blue.shade600, Colors.blue.shade400],
+                                colors: [
+                                  Colors.blue.shade600,
+                                  Colors.blue.shade400,
+                                ],
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
                               ),
@@ -198,18 +223,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             controller: _nameController,
                             decoration: InputDecoration(
                               labelText: 'Full Name',
-                              prefixIcon: Icon(Icons.person, color: Colors.blue.shade600),
+                              prefixIcon: Icon(
+                                Icons.person,
+                                color: Colors.blue.shade600,
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                borderSide: BorderSide(
+                                  color: Colors.blue.shade600,
+                                  width: 2,
+                                ),
                               ),
                               filled: true,
                               fillColor: Colors.grey.shade50,
@@ -227,18 +262,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             keyboardType: TextInputType.emailAddress,
                             decoration: InputDecoration(
                               labelText: 'Email',
-                              prefixIcon: Icon(Icons.email, color: Colors.blue.shade600),
+                              prefixIcon: Icon(
+                                Icons.email,
+                                color: Colors.blue.shade600,
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                borderSide: BorderSide(
+                                  color: Colors.blue.shade600,
+                                  width: 2,
+                                ),
                               ),
                               filled: true,
                               fillColor: Colors.grey.shade50,
@@ -259,10 +304,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             obscureText: _obscurePassword,
                             decoration: InputDecoration(
                               labelText: 'Password',
-                              prefixIcon: Icon(Icons.lock, color: Colors.blue.shade600),
+                              prefixIcon: Icon(
+                                Icons.lock,
+                                color: Colors.blue.shade600,
+                              ),
                               suffixIcon: IconButton(
                                 icon: Icon(
-                                  _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                                  _obscurePassword
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
                                   color: Colors.grey.shade600,
                                 ),
                                 onPressed: () {
@@ -273,15 +323,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                borderSide: BorderSide(
+                                  color: Colors.blue.shade600,
+                                  width: 2,
+                                ),
                               ),
                               filled: true,
                               fillColor: Colors.grey.shade50,
@@ -302,29 +359,42 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             obscureText: _obscureConfirmPassword,
                             decoration: InputDecoration(
                               labelText: 'Confirm Password',
-                              prefixIcon: Icon(Icons.lock, color: Colors.blue.shade600),
+                              prefixIcon: Icon(
+                                Icons.lock,
+                                color: Colors.blue.shade600,
+                              ),
                               suffixIcon: IconButton(
                                 icon: Icon(
-                                  _obscureConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                                  _obscureConfirmPassword
+                                      ? Icons.visibility
+                                      : Icons.visibility_off,
                                   color: Colors.grey.shade600,
                                 ),
                                 onPressed: () {
                                   setState(() {
-                                    _obscureConfirmPassword = !_obscureConfirmPassword;
+                                    _obscureConfirmPassword =
+                                        !_obscureConfirmPassword;
                                   });
                                 },
                               ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
+                                borderSide: BorderSide(
+                                  color: Colors.grey.shade300,
+                                ),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.blue.shade600, width: 2),
+                                borderSide: BorderSide(
+                                  color: Colors.blue.shade600,
+                                  width: 2,
+                                ),
                               ),
                               filled: true,
                               fillColor: Colors.grey.shade50,

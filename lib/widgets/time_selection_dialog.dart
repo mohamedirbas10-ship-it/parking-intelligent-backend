@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 class TimeSelectionDialog extends StatefulWidget {
   final String spotName;
 
-  const TimeSelectionDialog({
-    super.key,
-    required this.spotName,
-  });
+  const TimeSelectionDialog({super.key, required this.spotName});
 
   @override
   State<TimeSelectionDialog> createState() => _TimeSelectionDialogState();
@@ -33,9 +31,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: Colors.blue.shade600,
-            ),
+            colorScheme: ColorScheme.light(primary: Colors.blue.shade600),
           ),
           child: child!,
         );
@@ -47,7 +43,10 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
         startTime = picked;
         // If end time is before start time, adjust it
         if (endTime != null && _isTimeBefore(endTime!, picked)) {
-          endTime = TimeOfDay(hour: (picked.hour + 1) % 24, minute: picked.minute);
+          endTime = TimeOfDay(
+            hour: (picked.hour + 1) % 24,
+            minute: picked.minute,
+          );
         }
       });
     }
@@ -60,9 +59,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
       builder: (context, child) {
         return Theme(
           data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: Colors.blue.shade600,
-            ),
+            colorScheme: ColorScheme.light(primary: Colors.blue.shade600),
           ),
           child: child!,
         );
@@ -112,9 +109,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
     final isValid = duration > 0;
 
     return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
         padding: EdgeInsets.all(isMobile ? 20.0 : 24.0),
         decoration: BoxDecoration(
@@ -152,10 +147,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
             const SizedBox(height: 8),
             Text(
               'Choose start and end time for Spot ${widget.spotName}',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade600,
-              ),
+              style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 24),
@@ -195,7 +187,9 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                 children: [
                   Icon(
                     Icons.timer,
-                    color: isValid ? Colors.green.shade700 : Colors.red.shade700,
+                    color: isValid
+                        ? Colors.green.shade700
+                        : Colors.red.shade700,
                     size: 20,
                   ),
                   const SizedBox(width: 8),
@@ -204,7 +198,9 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: isValid ? Colors.green.shade700 : Colors.red.shade700,
+                      color: isValid
+                          ? Colors.green.shade700
+                          : Colors.red.shade700,
                     ),
                   ),
                 ],
@@ -215,10 +211,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
               const SizedBox(height: 8),
               Text(
                 'End time must be after start time',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.red.shade600,
-                ),
+                style: TextStyle(fontSize: 12, color: Colors.red.shade600),
               ),
             ],
 
@@ -228,7 +221,11 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                 Expanded(
                   child: TextButton(
                     onPressed: () {
-                      Navigator.pop(context);
+                      SchedulerBinding.instance.addPostFrameCallback((_) {
+                        if (mounted) {
+                          Navigator.pop(context);
+                        }
+                      });
                     },
                     style: TextButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -250,7 +247,24 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                   child: ElevatedButton(
                     onPressed: isValid
                         ? () {
-                            Navigator.pop(context, duration);
+                            SchedulerBinding.instance.addPostFrameCallback((_) {
+                              if (!mounted) return;
+                              final now = DateTime.now();
+                              final selectedStart = DateTime(
+                                now.year,
+                                now.month,
+                                now.day,
+                                startTime!.hour,
+                                startTime!.minute,
+                              );
+                              final effectiveStart = selectedStart.isBefore(now)
+                                  ? selectedStart.add(const Duration(days: 1))
+                                  : selectedStart;
+                              Navigator.pop(context, {
+                                'duration': duration,
+                                'startTime': effectiveStart,
+                              });
+                            });
                           }
                         : null,
                     style: ElevatedButton.styleFrom(
@@ -264,9 +278,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                     ),
                     child: const Text(
                       'Confirm',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
@@ -301,11 +313,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                 color: Colors.blue.shade50,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(
-                icon,
-                color: Colors.blue.shade600,
-                size: 24,
-              ),
+              child: Icon(icon, color: Colors.blue.shade600, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -332,11 +340,7 @@ class _TimeSelectionDialogState extends State<TimeSelectionDialog> {
                 ],
               ),
             ),
-            Icon(
-              Icons.edit,
-              color: Colors.grey.shade400,
-              size: 20,
-            ),
+            Icon(Icons.edit, color: Colors.grey.shade400, size: 20),
           ],
         ),
       ),

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../models/parking_spot.dart';
-import 'qr_code_screen.dart';
+import '../../models/booking.dart';
+import '../../services/booking_provider.dart';
 
 class BookingHistoryScreen extends StatefulWidget {
   const BookingHistoryScreen({super.key});
@@ -11,56 +12,26 @@ class BookingHistoryScreen extends StatefulWidget {
 }
 
 class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
-  List<ParkingSpot> _allBookings = [];
-  List<ParkingSpot> _activeBookings = [];
-  List<ParkingSpot> _expiredBookings = [];
-  List<ParkingSpot> _cancelledBookings = [];
   String _userId = '';
-  bool _isLoading = true;
-  int _selectedTab = 0; // 0 = All, 1 = Active, 2 = Expired, 3 = Cancelled
+  int _selectedTab = 0; // 0 = All, 1 = Active, 2 = Completed, 3 = Cancelled
 
   @override
   void initState() {
     super.initState();
-    _loadHistory();
+    _loadUserId();
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadUserId() async {
     final prefs = await SharedPreferences.getInstance();
-    _userId = prefs.getString('userEmail') ?? '';
-    final historyJson = prefs.getStringList('reservationHistory') ?? [];
-
-    final List<ParkingSpot> allSpots = historyJson.map((json) {
-      final parts = json.split('|');
-      final isCancelled = parts.length > 7 ? parts[7] == 'true' : false;
-      
-      return ParkingSpot(
-        id: parts[0],
-        name: parts[1],
-        isAvailable: false,
-        status: 'booked',
-        reservationTime: DateTime.parse(parts[2]),
-        validityHours: int.parse(parts[3]),
-        qrCode: parts[4],
-        userId: parts.length > 5 ? parts[5] : '',
-        userName: parts.length > 6 ? parts[6] : '',
-        isCancelled: isCancelled,
-      );
-    }).toList();
-
-    // Filter by current user
-    final userBookings = allSpots.where((spot) => spot.userId == _userId).toList();
-
-    // Sort by date (newest first)
-    userBookings.sort((a, b) => b.reservationTime!.compareTo(a.reservationTime!));
-
     setState(() {
-      _allBookings = userBookings;
-      _activeBookings = userBookings.where((spot) => !spot.isExpired && !spot.isCancelled).toList();
-      _expiredBookings = userBookings.where((spot) => spot.isExpired && !spot.isCancelled).toList();
-      _cancelledBookings = userBookings.where((spot) => spot.isCancelled).toList();
-      _isLoading = false;
+      _userId = prefs.getString('userEmail') ?? 'user_mohamed';
     });
+
+    // Load bookings from backend
+    if (mounted) {
+      final provider = Provider.of<BookingProvider>(context, listen: false);
+      await provider.loadUserBookings(_userId);
+    }
   }
 
   @override
@@ -70,38 +41,75 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
         title: const Text('Booking History'),
         backgroundColor: Colors.blue.shade700,
         foregroundColor: Colors.white,
+        actions: [
+          Consumer<BookingProvider>(
+            builder: (context, provider, child) {
+              return IconButton(
+                icon: const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+                onPressed: provider.isLoading
+                    ? null
+                    : () async {
+                        await provider.loadUserBookings(_userId);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Bookings refreshed!'),
+                              duration: Duration(seconds: 1),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      },
+              );
+            },
+          ),
+        ],
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                // Tab Bar
-                Container(
-                  color: Colors.grey.shade100,
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _buildTab('All', 0, _allBookings.length),
-                      ),
-                      Expanded(
-                        child: _buildTab('Active', 1, _activeBookings.length),
-                      ),
-                      Expanded(
-                        child: _buildTab('Expired', 2, _expiredBookings.length),
-                      ),
-                      Expanded(
-                        child: _buildTab('Cancelled', 3, _cancelledBookings.length),
-                      ),
-                    ],
-                  ),
-                ),
+      body: Consumer<BookingProvider>(
+        builder: (context, provider, child) {
+          final allBookings = provider.bookings;
+          final activeBookings = provider.activeBookings;
+          final completedBookings = provider.pastBookings;
 
-                // Content
-                Expanded(
-                  child: _buildContent(),
+          if (provider.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          return Column(
+            children: [
+              // Tab Bar
+              Container(
+                color: Colors.grey.shade100,
+                child: Row(
+                  children: [
+                    Expanded(child: _buildTab('All', 0, allBookings.length)),
+                    Expanded(
+                      child: _buildTab('Active', 1, activeBookings.length),
+                    ),
+                    Expanded(
+                      child: _buildTab(
+                        'Completed',
+                        2,
+                        completedBookings.length,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+
+              // Content
+              Expanded(
+                child: _buildContent(
+                  allBookings,
+                  activeBookings,
+                  completedBookings,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -156,20 +164,21 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
     );
   }
 
-  Widget _buildContent() {
-    List<ParkingSpot> bookings;
+  Widget _buildContent(
+    List<Booking> allBookings,
+    List<Booking> activeBookings,
+    List<Booking> completedBookings,
+  ) {
+    List<Booking> bookings;
     switch (_selectedTab) {
       case 1:
-        bookings = _activeBookings;
+        bookings = activeBookings;
         break;
       case 2:
-        bookings = _expiredBookings;
-        break;
-      case 3:
-        bookings = _cancelledBookings;
+        bookings = completedBookings;
         break;
       default:
-        bookings = _allBookings;
+        bookings = allBookings;
     }
 
     if (bookings.isEmpty) {
@@ -177,11 +186,7 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.history,
-              size: 80,
-              color: Colors.grey.shade300,
-            ),
+            Icon(Icons.history, size: 80, color: Colors.grey.shade300),
             const SizedBox(height: 16),
             Text(
               'No bookings yet',
@@ -205,10 +210,14 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
     );
   }
 
-  Widget _buildHistoryCard(ParkingSpot spot) {
-    final isCancelled = spot.isCancelled;
-    final isExpired = spot.isExpired;
-    final statusColor = isCancelled ? Colors.red : (isExpired ? Colors.orange : Colors.green);
+  Widget _buildHistoryCard(Booking booking) {
+    final isActive = booking.status == 'active' && !booking.isExpired;
+    final isCompleted = booking.status == 'completed' || booking.isExpired;
+    final isCancelled = booking.status == 'cancelled';
+
+    final statusColor = isCancelled
+        ? Colors.red
+        : (isCompleted ? Colors.orange : Colors.green);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -249,7 +258,7 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Slot ${spot.name}',
+                        'Slot ${booking.slotId}',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -258,13 +267,18 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
                       ),
                       const SizedBox(height: 4),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: statusColor.shade100,
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          isCancelled ? 'CANCELLED' : (isExpired ? 'EXPIRED' : 'ACTIVE'),
+                          isCancelled
+                              ? 'CANCELLED'
+                              : (isCompleted ? 'COMPLETED' : 'ACTIVE'),
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
@@ -278,43 +292,155 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
               ],
             ),
             const SizedBox(height: 16),
-            _buildInfoRow(Icons.calendar_today, 'Booked on', _formatDateTime(spot.reservationTime!)),
-            const SizedBox(height: 8),
-            _buildInfoRow(Icons.access_time, 'Duration', '${spot.validityHours} hour${spot.validityHours > 1 ? 's' : ''}'),
+            _buildInfoRow(
+              Icons.calendar_today,
+              'Booked on',
+              _formatDateTime(booking.reservedAt),
+            ),
             const SizedBox(height: 8),
             _buildInfoRow(
-              isCancelled ? Icons.block : (isExpired ? Icons.cancel : Icons.timer),
-              isCancelled ? 'Status' : (isExpired ? 'Expired' : 'Time Remaining'),
-              isCancelled ? 'Booking cancelled' : (isExpired ? 'Booking expired' : spot.timeRemaining),
+              Icons.access_time,
+              'Duration',
+              '${booking.duration} hour${booking.duration > 1 ? 's' : ''}',
             ),
-            if (!isExpired && !isCancelled) ...[
+            const SizedBox(height: 8),
+            _buildInfoRow(
+              isCancelled
+                  ? Icons.block
+                  : (isCompleted ? Icons.check_circle : Icons.timer),
+              isCancelled
+                  ? 'Status'
+                  : (isCompleted ? 'Status' : 'Time Remaining'),
+              isCancelled
+                  ? 'Booking cancelled'
+                  : (isCompleted ? 'Completed' : booking.timeRemaining),
+            ),
+            if (isActive) ...[
               const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => QRCodeScreen(spot: spot),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        // Show QR code
+                        _showQRCode(booking);
+                      },
+                      icon: const Icon(Icons.qr_code),
+                      label: const Text('VIEW QR CODE'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.qr_code),
-                  label: const Text('VIEW QR CODE'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green.shade600,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        // Cancel booking
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Cancel Booking'),
+                            content: Text(
+                              'Are you sure you want to cancel your booking for slot ${booking.slotId}?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('NO'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red.shade600,
+                                ),
+                                child: const Text('YES, CANCEL'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (confirmed == true) {
+                          final provider = Provider.of<BookingProvider>(
+                            context,
+                            listen: false,
+                          );
+                          await provider.cancelBooking(booking.id);
+
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Booking for slot ${booking.slotId} cancelled',
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                      icon: const Icon(Icons.cancel),
+                      label: const Text('CANCEL'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  void _showQRCode(Booking booking) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('QR Code - Slot ${booking.slotId}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.shade300),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                booking.qrCode,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 16),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Time Remaining: ${booking.timeRemaining}',
+              style: TextStyle(
+                color: Colors.orange.shade700,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -326,10 +452,7 @@ class _BookingHistoryScreenState extends State<BookingHistoryScreen> {
         const SizedBox(width: 8),
         Text(
           '$label: ',
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.grey.shade600,
-          ),
+          style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
         ),
         Text(
           value,

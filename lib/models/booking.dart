@@ -45,19 +45,26 @@ class Booking {
     };
   }
 
+  bool get isCancelled => status == 'cancelled';
+
   bool get isExpired {
     return DateTime.now().isAfter(expiresAt);
   }
 
   String get timeRemaining {
+    // Don't show time remaining for cancelled or completed bookings
+    if (status == 'cancelled' || status == 'completed') {
+      return 'N/A';
+    }
+
     final now = DateTime.now();
     final difference = expiresAt.difference(now);
-    
+
     if (difference.isNegative) return 'Expired';
-    
+
     final hours = difference.inHours;
     final minutes = difference.inMinutes % 60;
-    
+
     if (hours > 0) {
       return '${hours}h ${minutes}m';
     } else {
